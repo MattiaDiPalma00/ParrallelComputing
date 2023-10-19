@@ -1,0 +1,223 @@
+#include <stdlib.h>
+#include <errno.h>
+#include <mpi.h>
+#include <stdio.h>
+#include <math.h>
+int main (int argc, char* argv[])
+{
+
+FILE *filePointer;
+int menum, nproc;
+int n, nloc, tag, i, rest, tmp = 0, start = 0, sum = 0, sumtot = 0;
+int * x, * xloc; // array per il salvataggio degli elementi
+int size;//variabile size
+int numero;//variabile numero
+int z;//variabile contatore
+int lg; // variabile per il calcolo del logaritmo in base due
+int sumP=0; // variabile per somme parziali
+double t1,t2,t,tempoparziale;
+double tr1,tr2,tr;
+double tempo_totale,tempo_totaleR;
+MPI_Status status;
+MPI_Init(NULL,NULL);
+MPI_Comm_rank(MPI_COMM_WORLD, & menum);
+MPI_Comm_size(MPI_COMM_WORLD, & nproc);
+
+//PARTE 1 -> LETTURA DEL SIZE E DEGLI ELEMENTI DA TASTIERA
+if (menum == 0) {
+
+filePointer=fopen("/Docker_MPI/exercise_01/inputData.dat", "w");
+if( filePointer==NULL ) {
+                perror("Errore in apertura del file");
+                exit(1);
+}
+printf("Inserisci il numero di elementi da sommare:");
+fflush(stdout);
+scanf("%d", &size); // legge il numero del size da tastiera
+fprintf(filePointer, "%d\n", size);// scrive il numero del size da tastiera
+for(z=0;z<size;z++){//ciclo da 0 al numero del size
+        printf("Inserisci il numero:");
+        fflush(stdout);
+        scanf("%d", &numero);
+        fprintf(filePointer, "%d\n", numero); //salvataggio nel file
+}
+fclose(filePointer);
+
+        filePointer = fopen("/Docker_MPI/exercise_01/inputData.dat", "r");
+        if (!filePointer) {
+                printf("\nErrore durante l'apertura del file contenente i dati di input\nExit...\n");
+                printf("Error %d \n", errno);
+                return(-2);
+        }
+
+        fscanf(filePointer, "%d", &n);
+
+        x = (int*)calloc(n,sizeof(*x));
+        for( i = 0 ; i <n ; i++)
+        {
+        fscanf(filePointer,"%d",&x[i]);
+        }
+fclose(filePointer);
+ }
+
+// passaggio del size dal processore master ai vari nodi
+MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+MPI_Barrier(MPI_COMM_WORLD); // Blocco dei processori per l'inzio del calcolo dei tempi
+t1 = MPI_Wtime(); //tempo iniziale
+
+nloc = n/nproc; // Dimensione dei sottoarray distribuiti ai processori
+rest = n%nproc; //Salvataggio resto della divisione
+tag = 100;
+lg = log(nproc)/log(2);
+
+//Controllo sulla divisibilità del size inserito e il numero dei processori
+if (menum < rest && rest>0) {
+        //allocazione dell'array con più elementi (caso di non divisibilità del size e del numero di processori)
+        nloc++;
+        xloc = (int*)calloc(nloc,sizeof(*xloc));
+}
+else{
+        xloc = (int*)calloc(nloc,sizeof(*xloc));
+}
+
+//PARTE DUE -> DISTRIBUZIONE DEI DATI (SUDDIVIONE DEI SOTTOARRY)
+if ( menum == 0 )
+{
+        xloc = x ;
+        tmp = nloc ;
+        start = 0 ;
+
+        for(i = 1 ; i < nproc ; i++)
+        {
+                start +=tmp;
+                if (i==rest)
+                        tmp--;
+
+                MPI_Send(&x[start],tmp,MPI_INT,i,tag,MPI_COMM_WORLD);
+
+        }
+
+
+}
+else
+{
+	MPI_Recv(xloc,nloc,MPI_INT,0,tag,MPI_COMM_WORLD,&status);
+}
+
+
+//Somme parziali (S0,S1,S2,S3)
+for (i = 0 ; i<nloc ;i++)
+{
+        sum+=xloc[i];
+}
+
+if(menum == 0 )
+{
+	printf("\nPARTE 1\nDISTRIBUZIONE DEI DATI AI PROCESSORI\n");
+	fflush(stdout);
+}
+
+MPI_Barrier(MPI_COMM_WORLD);
+printf("\nSono %d -> ",menum);
+fflush(stdout);
+for (i = 0 ; i<nloc ;i++){
+	printf ( " %d ",xloc[i]);
+	fflush(stdout);
+}
+
+printf(" Somma parziale = %d\n",sum);
+fflush(stdout);
+
+MPI_Barrier(MPI_COMM_WORLD);
+
+if(menum == 0){
+        printf("\nPARTE2\nINVIO DELLE SOMME PARZIALI\n");
+        fflush(stdout);
+}
+MPI_Barrier(MPI_COMM_WORLD);
+t2 = MPI_Wtime();
+t = t2-t1 ;
+tempoparziale = t;
+tr1 = MPI_Wtime(); //Tempo iniziale per la routine MPI_Reduce
+
+MPI_Reduce(&sum,&sumtot,1,MPI_INT,MPI_SUM,0,MPI_COMM_WORLD); //Calcolo somme totali con MPI_Reduce
+tr2 = MPI_Wtime(); //Tempo finale per la routine MPI_Reduce
+
+tr = tr2 -tr1 ; //tempo totale
+
+MPI_Reduce(&tr, &tempo_totaleR, 1, MPI_DOUBLE, MPI_MAX,0,MPI_COMM_WORLD); //ricerca del massimo tempo totale
+
+MPI_Barrier(MPI_COMM_WORLD);
+
+//PARTE TRE -> CALCOLO SOMME PARZIALI UTILIZZANDO LE FUNZIONI SEND/RECV
+t1 = MPI_Wtime();
+int *parziali = (int*)calloc(lg,sizeof(*parziali));
+int j = 0 ;
+
+for (i = 0; i<lg ; i++){
+        int p1 = pow(2,i);
+        int p2 = pow(2,i+1);
+        if ((menum%p1) == 0)
+        {
+
+                if ((menum%p2 ) == 0)
+		{
+                        MPI_Recv(&sumP,1,MPI_INT,menum + p1,tag,MPI_COMM_WORLD,&status); // funzione di ricezione del dato MPI_INT
+                        printf("\nIl processore %d riceve dal processore %d la somma parziale %d",menum,menum+p1,sumP);
+                        fflush(stdout);
+                        sum += sumP; // Salvataggio delle varie somme compresa la finale
+                        parziali[j] = sum; //Salvataggio somme parziali
+                        j++;
+                        printf("--> risultato %d\n",sum);
+                         fflush(stdout);
+
+                }
+
+                else
+                {
+                        MPI_Send(&sum,1,MPI_INT,menum - p1,tag,MPI_COMM_WORLD);//Funzione per l'invio del dato MPI_INT
+                        printf("\nIl processore %d invia al processore %d la somma parziale %d\n",menum,menum-p1,sum);
+                        fflush(stdout);
+                }
+        }
+
+}
+
+MPI_Barrier(MPI_COMM_WORLD);
+
+//PARTE QUATTRO -> STAMPA A VIDEO DELLA SOMMA FINALE E DEI TEMPI CON LE DUE ROUTINE (SEND/RECV, MPI_REDUCE)
+if(menum == 0)
+{
+        printf("\nPARTE 3\n");
+        fflush(stdout);
+        printf("STAMPA SOMMA CONTENUTA SOLO IN P0 SENZA BROADCAST\n");
+        fflush(stdout);
+        printf("PROCESSORI CON LA SOMMA TOTALE\n");
+        fflush(stdout);
+}
+
+MPI_Barrier(MPI_COMM_WORLD);
+if(menum == 0 )
+{
+        printf("\nsono %d e questa è la somma totale %d\n ",menum,sum);
+        printf("\nsono %d e questa è la somma totale utilizzando MPI_Reduce %d\n ",menum,sumtot);
+        fflush(stdout);
+}
+
+MPI_Barrier(MPI_COMM_WORLD);
+t2 = MPI_Wtime();
+t = tempoparziale + (t2-t1);
+MPI_Reduce(&t, &tempo_totale, 1, MPI_DOUBLE, MPI_MAX,0,MPI_COMM_WORLD);
+MPI_Barrier(MPI_COMM_WORLD);
+if(menum == 0)
+{
+        printf("\nTempo algoritmo = %f\n",tempo_totale);
+        printf("Tempo algoritmo con MPI_reduce %f\n",tempo_totaleR);
+}
+
+
+MPI_Finalize();
+
+return 0 ;
+}
